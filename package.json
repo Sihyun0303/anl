@@ -1,0 +1,29 @@
+{
+  "name": "tizen-anilife",
+  "appName": "Anilife",
+  "version": "1.0.3",
+  "description": "Anilife for Samsung Tizen TV.",
+  "packageType": "mods",
+  "websiteURL": "https://anilife.app",
+  "main": "index.js",
+  "serviceFile": "service.js",
+  "author": "Sihyun0303",
+  "keys": [
+    "MediaPlayPause",
+    "MediaPlay",
+    "MediaPause",
+    "MediaStop",
+    "MediaFastForward",
+    "MediaRewind",
+    "MediaTrackNext",
+    "MediaTrackPrevious"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+github.com"
+  },
+  "tizenbrew": {
+    "type": "module"
+  },
+  "license": "MIT"
+}

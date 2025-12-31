@@ -1,9 +1,19 @@
 (function() {
     "use strict";
 
+    // --- 상태 관리 ---
+    var state = {
+        initialized: false,
+        focusIndex: 0,
+        elements: []
+    };
+
     // --- 1. 스타일 설정 (포커스 효과) ---
     function injectStyles() {
         if (document.getElementById('tflix-styles')) return;
+        
+        console.log('[TFlix] Injecting styles...');
+        
         var style = document.createElement("style");
         style.id = 'tflix-styles';
         
@@ -35,25 +45,95 @@
             style.appendChild(document.createTextNode(styleText));
         }
         
-        document.head.appendChild(style);
-        document.body.classList.add("tflix-nav-mode");
+        if (document.head) {
+            document.head.appendChild(style);
+            document.body.classList.add("tflix-nav-mode");
+            console.log('[TFlix] Styles injected successfully');
+        } else {
+            console.error('[TFlix] document.head not available');
+        }
     }
 
-    // --- 2. 공간 탐색 엔진 (사이드바 및 일반 요소) ---
-    window.navigate = function(dir) {
-        var current = document.activeElement || document.body;
-        var selectors = 'a, button, input, [tabindex="0"], .movie-card, .nav-item, .sidebar a';
+    // --- 2. 포커스 가능한 요소 스캔 ---
+    function scanElements() {
+        var selectors = 'a, button, input, [tabindex="0"], .movie-card, .nav-item, .sidebar a, [role="button"]';
         var elements = document.querySelectorAll(selectors);
         var focusables = [];
         
-        // Array.from 대신 for 루프 사용
         var i = 0;
         for (i = 0; i < elements.length; i++) {
             var el = elements[i];
             var rect = el.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
+            var style = window.getComputedStyle(el);
+            
+            // 보이는 요소만 추가
+            if (rect.width > 0 && rect.height > 0 && 
+                style.display !== 'none' && 
+                style.visibility !== 'hidden') {
                 focusables.push(el);
             }
+        }
+
+        state.elements = focusables;
+        console.log('[TFlix] Found ' + focusables.length + ' focusable elements');
+        return focusables;
+    }
+
+    // --- 3. 포커스 설정 ---
+    function setFocus(index) {
+        if (state.elements.length === 0) {
+            console.warn('[TFlix] No elements to focus');
+            return false;
+        }
+
+        // 범위 체크
+        if (index < 0) index = 0;
+        if (index >= state.elements.length) index = state.elements.length - 1;
+
+        // 기존 포커스 제거
+        var oldFocused = document.querySelectorAll('.tflix-focused');
+        var i = 0;
+        for (i = 0; i < oldFocused.length; i++) {
+            oldFocused[i].classList.remove('tflix-focused');
+        }
+
+        // 새 포커스 설정
+        var element = state.elements[index];
+        if (element) {
+            element.classList.add('tflix-focused');
+            element.focus();
+            
+            try {
+                element.scrollIntoView(false);
+            } catch (e) {
+                if (element.scrollIntoViewIfNeeded) {
+                    element.scrollIntoViewIfNeeded();
+                }
+            }
+            
+            state.focusIndex = index;
+            console.log('[TFlix] Focused element ' + index + '/' + state.elements.length);
+            return true;
+        }
+        
+        return false;
+    }
+
+    // --- 4. 공간 탐색 엔진 ---
+    window.navigate = function(dir) {
+        // 요소가 없으면 다시 스캔
+        if (state.elements.length === 0) {
+            scanElements();
+            if (state.elements.length === 0) {
+                console.warn('[TFlix] Still no elements found');
+                return;
+            }
+        }
+
+        var current = document.querySelector('.tflix-focused') || state.elements[state.focusIndex];
+        if (!current) {
+            setFocus(0);
+            return;
         }
 
         var curRect = current.getBoundingClientRect();
@@ -61,8 +141,8 @@
         var minDist = Infinity;
         var j = 0;
 
-        for (j = 0; j < focusables.length; j++) {
-            var target = focusables[j];
+        for (j = 0; j < state.elements.length; j++) {
+            var target = state.elements[j];
             if (target === current) continue;
             
             var tarRect = target.getBoundingClientRect();
@@ -95,28 +175,27 @@
             }
         }
 
+        // 가장 가까운 요소로 이동
         if (closest) {
-            var focusedElements = document.querySelectorAll('.tflix-focused');
-            var k = 0;
-            for (k = 0; k < focusedElements.length; k++) {
-                focusedElements[k].classList.remove('tflix-focused');
+            var newIndex = state.elements.indexOf(closest);
+            if (newIndex !== -1) {
+                setFocus(newIndex);
             }
-            
-            closest.classList.add('tflix-focused');
-            closest.focus();
-            
-            // Chromium 47 호환 스크롤
-            try {
-                closest.scrollIntoView(false);
-            } catch (e) {
-                if (closest.scrollIntoViewIfNeeded) {
-                    closest.scrollIntoViewIfNeeded();
+        } else {
+            // Fallback: 선형 이동
+            if (dir === 'down' || dir === 'right') {
+                if (state.focusIndex < state.elements.length - 1) {
+                    setFocus(state.focusIndex + 1);
+                }
+            } else if (dir === 'up' || dir === 'left') {
+                if (state.focusIndex > 0) {
+                    setFocus(state.focusIndex - 1);
                 }
             }
         }
     };
 
-    // --- 3. 알림 메시지 (Toast) ---
+    // --- 5. 알림 메시지 (Toast) ---
     function showToast(msg) {
         var toast = document.querySelector('.tflix-toast');
         if (!toast) {
@@ -137,7 +216,7 @@
         }, 2000);
     }
 
-    // --- 4. 핵심 키 이벤트 (keyCode 기반) ---
+    // --- 6. 핵심 키 이벤트 (keyCode 기반) ---
     document.addEventListener('keydown', function(e) {
         var video = document.querySelector('video');
         var keyCode = e.keyCode;
@@ -169,7 +248,6 @@
                 var focused = document.querySelector('.tflix-focused');
                 
                 if (video && !video.paused) {
-                    // 영상 재생 중이면 일시정지
                     video.pause();
                     showToast("일시정지");
                 } else if (focused) {
@@ -185,7 +263,6 @@
             case 10009: // Tizen Back 버튼
                 e.preventDefault();
                 
-                // Fullscreen 체크 (타이젠 호환)
                 var isFullscreen = document.fullscreenElement || 
                                    document.webkitFullscreenElement || 
                                    document.mozFullScreenElement || 
@@ -219,70 +296,165 @@
                     }
                 }
                 break;
+                
+            case 82: // R키 (재스캔 - 디버깅용)
+                e.preventDefault();
+                console.log('[TFlix] Manual rescan triggered');
+                scanElements();
+                if (state.elements.length > 0) {
+                    setFocus(0);
+                    showToast("재스캔 완료: " + state.elements.length + "개");
+                }
+                break;
         }
     }, true);
 
-    // 초기화 실행
+    // --- 7. 초기화 함수 ---
     function init() {
+        if (state.initialized) {
+            console.log('[TFlix] Already initialized');
+            return;
+        }
+
+        console.log('[TFlix] Initializing...');
+
+        // 스타일 주입
         injectStyles();
         
-        // 2초 뒤 첫 번째 요소에 포커스
-        setTimeout(function() {
-            var first = document.querySelector('a, button');
-            if (first) {
-                first.classList.add('tflix-focused');
-                first.focus();
-            }
-        }, 2000);
+        // 요소 스캔
+        scanElements();
         
-        console.log('[TFlix] Initialized for Tizen');
+        // 첫 번째 요소에 포커스
+        if (state.elements.length > 0) {
+            var success = setFocus(0);
+            if (success) {
+                console.log('[TFlix] ✓ Initial focus set');
+                showToast("TFlix 활성화: " + state.elements.length + "개 요소");
+            } else {
+                console.error('[TFlix] Failed to set initial focus');
+            }
+        } else {
+            console.warn('[TFlix] No focusable elements found yet');
+        }
+        
+        state.initialized = true;
+        console.log('[TFlix] ✓ Initialization complete');
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
-
-    // 동적 요소 감시 (새로운 영화 포스터 등이 뜰 때)
+    // --- 8. 동적 요소 감시 ---
     var observer = null;
     
-    try {
-        if (window.MutationObserver) {
-            observer = new MutationObserver(function(mutations) {
-                var focusables = document.querySelectorAll('a, button, .movie-card');
-                var i = 0;
-                for (i = 0; i < focusables.length; i++) {
-                    var el = focusables[i];
-                    if (!el.hasAttribute('tabindex')) {
-                        el.setAttribute('tabindex', '0');
+    function setupObserver() {
+        try {
+            if (window.MutationObserver) {
+                observer = new MutationObserver(function(mutations) {
+                    var needsRescan = false;
+                    var i = 0;
+                    
+                    for (i = 0; i < mutations.length; i++) {
+                        if (mutations[i].addedNodes.length > 0) {
+                            needsRescan = true;
+                            break;
+                        }
                     }
-                }
-            });
-            
-            observer.observe(document.body, { 
-                childList: true, 
-                subtree: true 
-            });
-            
-            console.log('[TFlix] MutationObserver active');
-        } else {
-            // Fallback: 주기적으로 체크
-            setInterval(function() {
-                var focusables = document.querySelectorAll('a, button, .movie-card');
-                var i = 0;
-                for (i = 0; i < focusables.length; i++) {
-                    var el = focusables[i];
-                    if (!el.hasAttribute('tabindex')) {
-                        el.setAttribute('tabindex', '0');
+                    
+                    if (needsRescan) {
+                        console.log('[TFlix] DOM changed, rescanning...');
+                        var oldCount = state.elements.length;
+                        scanElements();
+                        var newCount = state.elements.length;
+                        
+                        if (oldCount !== newCount) {
+                            console.log('[TFlix] Element count changed: ' + oldCount + ' -> ' + newCount);
+                        }
+                        
+                        // 포커스된 요소가 없으면 첫 번째로
+                        if (!document.querySelector('.tflix-focused') && state.elements.length > 0) {
+                            setFocus(0);
+                        }
                     }
-                }
-            }, 2000);
-            
-            console.log('[TFlix] Using fallback polling');
+                });
+                
+                observer.observe(document.body, { 
+                    childList: true, 
+                    subtree: true 
+                });
+                
+                console.log('[TFlix] MutationObserver active');
+            } else {
+                console.log('[TFlix] Using fallback polling');
+            }
+        } catch (e) {
+            console.error('[TFlix] Observer error:', e);
         }
-    } catch (e) {
-        console.error('[TFlix] Observer error:', e);
     }
+
+    // --- 9. 시작 함수 (여러 타이밍에 재시도) ---
+    function start() {
+        console.log('[TFlix] Starting (readyState: ' + document.readyState + ')');
+        
+        // 즉시 실행
+        setTimeout(function() {
+            init();
+            setupObserver();
+        }, 500);
+        
+        // 1초 후 재시도
+        setTimeout(function() {
+            if (state.elements.length === 0) {
+                console.log('[TFlix] Retry 1s - rescanning...');
+                scanElements();
+                if (state.elements.length > 0) {
+                    setFocus(0);
+                }
+            }
+        }, 1000);
+        
+        // 3초 후 재시도
+        setTimeout(function() {
+            if (state.elements.length === 0) {
+                console.log('[TFlix] Retry 3s - rescanning...');
+                scanElements();
+                if (state.elements.length > 0) {
+                    setFocus(0);
+                }
+            }
+        }, 3000);
+        
+        // 5초 후 최종 재시도
+        setTimeout(function() {
+            if (state.elements.length === 0) {
+                console.log('[TFlix] Retry 5s - final attempt...');
+                scanElements();
+                if (state.elements.length > 0) {
+                    setFocus(0);
+                } else {
+                    console.error('[TFlix] ✗ No elements found after 5 seconds');
+                    showToast("요소를 찾을 수 없음 (R키로 재시도)");
+                }
+            }
+        }, 5000);
+        
+        // 10초마다 주기적 재스캔
+        setInterval(function() {
+            var oldCount = state.elements.length;
+            scanElements();
+            var newCount = state.elements.length;
+            
+            if (oldCount === 0 && newCount > 0) {
+                console.log('[TFlix] Elements appeared! Setting focus...');
+                setFocus(0);
+            }
+        }, 10000);
+    }
+
+    // --- 10. 진입점 ---
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start);
+    } else {
+        start();
+    }
+
+    console.log('[TFlix] Script loaded');
 
 })();

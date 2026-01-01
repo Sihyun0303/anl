@@ -1,460 +1,632 @@
+// ==UserScript==
+// @name         Anilife TV - Tizen Navigation
+// @namespace    http://tampermonkey.net/
+// @version      2.0-tizen
+// @description  TV Remote navigation for Anilife.app (Tizen 3.0+ / Chromium 47)
+// @author       You
+// @match        https://anilife.app/*
+// @match        https://*.anilife.app/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
 (function() {
-    "use strict";
+  'use strict';
 
-    // --- 상태 관리 ---
-    var state = {
-        initialized: false,
-        focusIndex: 0,
-        elements: []
+  // ========================================
+  // POLYFILLS FOR CHROMIUM 47
+  // ========================================
+  if (typeof Object.assign !== 'function') {
+    Object.assign = function(target) {
+      if (target == null) {
+        throw new TypeError('Cannot convert undefined or null to object');
+      }
+      var to = Object(target);
+      var i = 1;
+      for (i = 1; i < arguments.length; i++) {
+        var nextSource = arguments[i];
+        if (nextSource != null) {
+          var keysArray = Object.keys(Object(nextSource));
+          var nextIndex = 0;
+          for (nextIndex = 0; nextIndex < keysArray.length; nextIndex++) {
+            var nextKey = keysArray[nextIndex];
+            to[nextKey] = nextSource[nextKey];
+          }
+        }
+      }
+      return to;
     };
+  }
 
-    // --- 1. 스타일 설정 (포커스 효과) ---
-    function injectStyles() {
-        if (document.getElementById('tflix-styles')) return;
-        
-        console.log('[TFlix] Injecting styles...');
-        
-        var style = document.createElement("style");
-        style.id = 'tflix-styles';
-        
-        var styleText = '';
-        styleText += '.tflix-focused {';
-        styleText += '    transform: scale(1.05) !important;';
-        styleText += '    box-shadow: 0 0 15px 5px rgba(255, 255, 255, 0.6) !important;';
-        styleText += '    outline: 3px solid white !important;';
-        styleText += '    transition: all 0.2s ease !important;';
-        styleText += '    z-index: 9999 !important;';
-        styleText += '    position: relative !important;';
-        styleText += '}';
-        styleText += 'body.tflix-nav-mode { cursor: none !important; }';
-        styleText += '.tflix-toast {';
-        styleText += '    position: fixed; top: 50px; right: 50px;';
-        styleText += '    background: rgba(0,0,0,0.8);';
-        styleText += '    color: white; padding: 15px 25px;';
-        styleText += '    border-radius: 10px; z-index: 10000;';
-        styleText += '    font-size: 20px; transition: opacity 0.3s;';
-        styleText += '    opacity: 0;';
-        styleText += '}';
-        styleText += '.tflix-toast.show { opacity: 1; }';
-        
-        if (style.styleSheet) {
-            style.styleSheet.cssText = styleText;
-        } else if (style.textContent !== undefined) {
-            style.textContent = styleText;
-        } else {
-            style.appendChild(document.createTextNode(styleText));
+  if (!Array.prototype.find) {
+    Array.prototype.find = function(predicate) {
+      if (this == null) {
+        throw new TypeError('Array.prototype.find called on null or undefined');
+      }
+      if (typeof predicate !== 'function') {
+        throw new TypeError('predicate must be a function');
+      }
+      var list = Object(this);
+      var length = parseInt(list.length) || 0;
+      var thisArg = arguments[1];
+      var value;
+      var i = 0;
+      for (i = 0; i < length; i++) {
+        value = list[i];
+        if (predicate.call(thisArg, value, i, list)) {
+          return value;
         }
-        
-        if (document.head) {
-            document.head.appendChild(style);
-            document.body.classList.add("tflix-nav-mode");
-            console.log('[TFlix] Styles injected successfully');
-        } else {
-            console.error('[TFlix] document.head not available');
-        }
-    }
+      }
+      return undefined;
+    };
+  }
 
-    // --- 2. 포커스 가능한 요소 스캔 ---
-    function scanElements() {
-        var selectors = 'a, button, input, [tabindex="0"], .movie-card, .nav-item, .sidebar a, [role="button"]';
-        var elements = document.querySelectorAll(selectors);
-        var focusables = [];
-        
-        var i = 0;
-        for (i = 0; i < elements.length; i++) {
-            var el = elements[i];
-            var rect = el.getBoundingClientRect();
-            var style = window.getComputedStyle(el);
-            
-            // 보이는 요소만 추가
-            if (rect.width > 0 && rect.height > 0 && 
-                style.display !== 'none' && 
-                style.visibility !== 'hidden') {
-                focusables.push(el);
-            }
-        }
+  // ========================================
+  // CONFIGURATION
+  // ========================================
+  var CONFIG = {
+    focusColor: '#3B82F6',  // Anilife blue color
+    focusSize: '4px',
+    focusAnimation: true,
+    hideSelectors: [
+      '#cookie-banner',
+      '.popup:not(.tv-content)',
+      '.modal:not(.tv-content)',
+      '.ad',
+      '.advertisement',
+      '[class*="cookie"]',
+      '[id*="cookie"]'
+    ],
+    maxZIndex: 999999
+  };
 
-        state.elements = focusables;
-        console.log('[TFlix] Found ' + focusables.length + ' focusable elements');
-        return focusables;
-    }
+  // ========================================
+  // STATE MANAGEMENT
+  // ========================================
+  var state = {
+    focusIndex: 0,
+    focusableElements: [],
+    initialized: false,
+    lastFocus: null
+  };
 
-    // --- 3. 포커스 설정 ---
-    function setFocus(index) {
-        if (state.elements.length === 0) {
-            console.warn('[TFlix] No elements to focus');
-            return false;
-        }
+  // ========================================
+  // CSS INJECTION
+  // ========================================
+  function addStyles() {
+    try {
+      var existingStyle = document.getElementById('anilife-tv-styles');
+      if (existingStyle && existingStyle.parentNode) {
+        existingStyle.parentNode.removeChild(existingStyle);
+      }
 
-        // 범위 체크
-        if (index < 0) index = 0;
-        if (index >= state.elements.length) index = state.elements.length - 1;
-
-        // 기존 포커스 제거
-        var oldFocused = document.querySelectorAll('.tflix-focused');
-        var i = 0;
-        for (i = 0; i < oldFocused.length; i++) {
-            oldFocused[i].classList.remove('tflix-focused');
-        }
-
-        // 새 포커스 설정
-        var element = state.elements[index];
-        if (element) {
-            element.classList.add('tflix-focused');
-            element.focus();
-            
-            try {
-                element.scrollIntoView(false);
-            } catch (e) {
-                if (element.scrollIntoViewIfNeeded) {
-                    element.scrollIntoViewIfNeeded();
-                }
-            }
-            
-            state.focusIndex = index;
-            console.log('[TFlix] Focused element ' + index + '/' + state.elements.length);
-            return true;
-        }
-        
+      if (!document.head) {
         return false;
+      }
+
+      var style = document.createElement('style');
+      style.id = 'anilife-tv-styles';
+      style.type = 'text/css';
+      
+      var styleText = '';
+      
+      // Body 기본 스타일
+      styleText += 'body { background-color: #000 !important; color: #fff !important; }';
+      
+      // Hide unwanted elements
+      styleText += CONFIG.hideSelectors.join(', ') + ' { display: none !important; visibility: hidden !important; }';
+
+      // Focus styles - Anilife blue theme
+      styleText += '.tv-focused { outline: ' + CONFIG.focusSize + ' solid ' + CONFIG.focusColor + ' !important; box-shadow: 0 0 20px ' + CONFIG.focusColor + ', 0 0 40px ' + CONFIG.focusColor + ', 0 0 60px rgba(59, 130, 246, 0.3) !important; transform: scale(1.08) !important; transition: all 0.15s ease-out !important; z-index: ' + CONFIG.maxZIndex + ' !important; position: relative !important; }';
+
+      // Focus animation
+      styleText += '@keyframes focusPulse { 0%, 100% { box-shadow: 0 0 20px ' + CONFIG.focusColor + ', 0 0 40px ' + CONFIG.focusColor + ', 0 0 60px rgba(59, 130, 246, 0.3); } 50% { box-shadow: 0 0 30px ' + CONFIG.focusColor + ', 0 0 50px ' + CONFIG.focusColor + ', 0 0 70px rgba(59, 130, 246, 0.5); } }';
+      styleText += '.tv-focused.animating { animation: focusPulse 2s ease-in-out infinite; }';
+
+      // Anilife specific card styles - swiper-slide 및 실제 사이트 구조 타겟
+      styleText += 'swiper-slide, swiper-slide a.group, li.group { transition: transform 0.15s ease-out, box-shadow 0.15s ease-out !important; cursor: pointer !important; }';
+      styleText += 'swiper-slide .rounded-md, .aspect-poster { border-radius: 0.375rem !important; }';
+      
+      // 에피소드 리스트 항목
+      styleText += 'li[data-type="thumbnail"] { transition: transform 0.15s ease-out, box-shadow 0.15s ease-out !important; cursor: pointer !important; }';
+
+      // Focusable elements
+      styleText += 'a, button, [role="button"] { outline: none !important; transition: all 0.15s ease-out !important; }';
+      styleText += 'a:focus, button:focus, [role="button"]:focus { outline: none !important; }';
+
+      // Back button
+      styleText += '.tv-back-button { position: fixed !important; top: 20px !important; left: 20px !important; background: rgba(0, 0, 0, 0.8) !important; color: white !important; border: 2px solid ' + CONFIG.focusColor + ' !important; padding: 12px 24px !important; font-size: 1.2em !important; border-radius: 8px !important; cursor: pointer !important; z-index: ' + CONFIG.maxZIndex + ' !important; }';
+      styleText += '.tv-back-button.tv-focused { background: ' + CONFIG.focusColor + ' !important; }';
+
+      // Scrollbar 숨기기
+      styleText += '::-webkit-scrollbar { width: 0 !important; height: 0 !important; }';
+
+      // Use appendChild for Chromium 47 compatibility
+      if (style.styleSheet) {
+        // IE
+        style.styleSheet.cssText = styleText;
+      } else if (style.textContent !== undefined) {
+        style.textContent = styleText;
+      } else {
+        style.appendChild(document.createTextNode(styleText));
+      }
+
+      document.head.appendChild(style);
+      console.log('[Anilife TV] Styles injected');
+      return true;
+    } catch (e) {
+      console.error('[Anilife TV] Error adding styles:', e);
+      return false;
     }
+  }
 
-    // --- 4. 공간 탐색 엔진 ---
-    window.navigate = function(dir) {
-        // 요소가 없으면 다시 스캔
-        if (state.elements.length === 0) {
-            scanElements();
-            if (state.elements.length === 0) {
-                console.warn('[TFlix] Still no elements found');
-                return;
-            }
-        }
-
-        var current = document.querySelector('.tflix-focused') || state.elements[state.focusIndex];
-        if (!current) {
-            setFocus(0);
-            return;
-        }
-
-        var curRect = current.getBoundingClientRect();
-        var closest = null;
-        var minDist = Infinity;
-        var j = 0;
-
-        for (j = 0; j < state.elements.length; j++) {
-            var target = state.elements[j];
-            if (target === current) continue;
-            
-            var tarRect = target.getBoundingClientRect();
-
-            // 방향 판단
-            var isCorrect = false;
-            var curCenter = { 
-                x: curRect.left + curRect.width / 2, 
-                y: curRect.top + curRect.height / 2 
-            };
-            var tarCenter = { 
-                x: tarRect.left + tarRect.width / 2, 
-                y: tarRect.top + tarRect.height / 2 
-            };
-
-            if (dir === 'up') isCorrect = tarCenter.y < curCenter.y;
-            if (dir === 'down') isCorrect = tarCenter.y > curCenter.y;
-            if (dir === 'left') isCorrect = tarCenter.x < curCenter.x;
-            if (dir === 'right') isCorrect = tarCenter.x > curCenter.x;
-
-            if (isCorrect) {
-                var dx = tarCenter.x - curCenter.x;
-                var dy = tarCenter.y - curCenter.y;
-                var dist = Math.pow(dx, 2) + Math.pow(dy, 2);
-                
-                if (dist < minDist) {
-                    minDist = dist;
-                    closest = target;
-                }
-            }
-        }
-
-        // 가장 가까운 요소로 이동
-        if (closest) {
-            var newIndex = state.elements.indexOf(closest);
-            if (newIndex !== -1) {
-                setFocus(newIndex);
-            }
-        } else {
-            // Fallback: 선형 이동
-            if (dir === 'down' || dir === 'right') {
-                if (state.focusIndex < state.elements.length - 1) {
-                    setFocus(state.focusIndex + 1);
-                }
-            } else if (dir === 'up' || dir === 'left') {
-                if (state.focusIndex > 0) {
-                    setFocus(state.focusIndex - 1);
-                }
-            }
-        }
-    };
-
-    // --- 5. 알림 메시지 (Toast) ---
-    function showToast(msg) {
-        var toast = document.querySelector('.tflix-toast');
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.className = 'tflix-toast';
-            document.body.appendChild(toast);
-        }
-        
-        if (toast.textContent !== undefined) {
-            toast.textContent = msg;
-        } else {
-            toast.innerText = msg;
-        }
-        
-        toast.classList.add('show');
-        setTimeout(function() {
-            toast.classList.remove('show');
-        }, 2000);
-    }
-
-    // --- 6. 핵심 키 이벤트 (keyCode 기반) ---
-    document.addEventListener('keydown', function(e) {
-        var video = document.querySelector('video');
-        var keyCode = e.keyCode;
-
-        switch(keyCode) {
-            case 38: // ArrowUp
-                e.preventDefault();
-                navigate('up');
-                break;
-                
-            case 40: // ArrowDown
-                e.preventDefault();
-                navigate('down');
-                break;
-                
-            case 37: // ArrowLeft
-                e.preventDefault();
-                navigate('left');
-                break;
-                
-            case 39: // ArrowRight
-                e.preventDefault();
-                navigate('right');
-                break;
-
-            case 70: // F키
-            case 13: // Enter (확인 및 재생 제어)
-                e.preventDefault();
-                var focused = document.querySelector('.tflix-focused');
-                
-                if (video && !video.paused) {
-                    video.pause();
-                    showToast("일시정지");
-                } else if (focused) {
-                    focused.click();
-                    if (video && video.paused) {
-                        video.play();
-                        showToast("재생");
-                    }
-                }
-                break;
-
-            case 81: // Q키 (뒤로가기)
-            case 10009: // Tizen Back 버튼
-                e.preventDefault();
-                
-                var isFullscreen = document.fullscreenElement || 
-                                   document.webkitFullscreenElement || 
-                                   document.mozFullScreenElement || 
-                                   document.msFullscreenElement;
-                
-                if (isFullscreen) {
-                    if (document.exitFullscreen) {
-                        document.exitFullscreen();
-                    } else if (document.webkitExitFullscreen) {
-                        document.webkitExitFullscreen();
-                    } else if (document.mozCancelFullScreen) {
-                        document.mozCancelFullScreen();
-                    } else if (document.msExitFullscreen) {
-                        document.msExitFullscreen();
-                    }
-                } else {
-                    window.history.back();
-                }
-                break;
-            
-            case 415: // MediaPlay (타이젠)
-            case 19: // MediaPause (타이젠)
-                e.preventDefault();
-                if (video) {
-                    if (video.paused) {
-                        video.play();
-                        showToast("재생");
-                    } else {
-                        video.pause();
-                        showToast("일시정지");
-                    }
-                }
-                break;
-                
-            case 82: // R키 (재스캔 - 디버깅용)
-                e.preventDefault();
-                console.log('[TFlix] Manual rescan triggered');
-                scanElements();
-                if (state.elements.length > 0) {
-                    setFocus(0);
-                    showToast("재스캔 완료: " + state.elements.length + "개");
-                }
-                break;
-        }
-    }, true);
-
-    // --- 7. 초기화 함수 ---
-    function init() {
-        if (state.initialized) {
-            console.log('[TFlix] Already initialized');
-            return;
-        }
-
-        console.log('[TFlix] Initializing...');
-
-        // 스타일 주입
-        injectStyles();
-        
-        // 요소 스캔
-        scanElements();
-        
-        // 첫 번째 요소에 포커스
-        if (state.elements.length > 0) {
-            var success = setFocus(0);
-            if (success) {
-                console.log('[TFlix] ✓ Initial focus set');
-                showToast("TFlix 활성화: " + state.elements.length + "개 요소");
-            } else {
-                console.error('[TFlix] Failed to set initial focus');
-            }
-        } else {
-            console.warn('[TFlix] No focusable elements found yet');
-        }
-        
-        state.initialized = true;
-        console.log('[TFlix] ✓ Initialization complete');
-    }
-
-    // --- 8. 동적 요소 감시 ---
-    var observer = null;
+  // ========================================
+  // ELEMENT SCANNING
+  // ========================================
+  function scanFocusableElements() {
+    var elements = [];
     
-    function setupObserver() {
-        try {
-            if (window.MutationObserver) {
-                observer = new MutationObserver(function(mutations) {
-                    var needsRescan = false;
-                    var i = 0;
-                    
-                    for (i = 0; i < mutations.length; i++) {
-                        if (mutations[i].addedNodes.length > 0) {
-                            needsRescan = true;
-                            break;
-                        }
-                    }
-                    
-                    if (needsRescan) {
-                        console.log('[TFlix] DOM changed, rescanning...');
-                        var oldCount = state.elements.length;
-                        scanElements();
-                        var newCount = state.elements.length;
-                        
-                        if (oldCount !== newCount) {
-                            console.log('[TFlix] Element count changed: ' + oldCount + ' -> ' + newCount);
-                        }
-                        
-                        // 포커스된 요소가 없으면 첫 번째로
-                        if (!document.querySelector('.tflix-focused') && state.elements.length > 0) {
-                            setFocus(0);
-                        }
-                    }
-                });
-                
-                observer.observe(document.body, { 
-                    childList: true, 
-                    subtree: true 
-                });
-                
-                console.log('[TFlix] MutationObserver active');
-            } else {
-                console.log('[TFlix] Using fallback polling');
+    try {
+      // 1. 사이드바 네비게이션 링크 (홈, 요일별, 공지사항 등)
+      var sidebarLinks = document.querySelectorAll('li.group a[href]');
+      
+      // 2. 애니메이션 카드 (swiper-slide 내부의 링크)
+      var animeCards = document.querySelectorAll('swiper-slide a.group[href^="/content/"]');
+      
+      // 3. 재생 버튼
+      var playButtons = document.querySelectorAll('button[aria-label*="재생"]');
+      
+      // 4. 탭 버튼 (회차, 정보, 시리즈)
+      var tabButtons = document.querySelectorAll('button[role="tab"]');
+      
+      // 5. 에피소드 리스트 항목
+      var episodeItems = document.querySelectorAll('li.group[data-type="thumbnail"]');
+      
+      // 6. 일반 버튼들
+      var generalButtons = document.querySelectorAll('button:not([role="tab"]):not([aria-label*="재생"])');
+      
+      // 7. 기타 일반 링크
+      var generalLinks = document.querySelectorAll('a[href]:not(li.group a):not(swiper-slide a)');
+      
+      var allSelectors = [
+        sidebarLinks,
+        animeCards,
+        playButtons,
+        tabButtons,
+        episodeItems,
+        generalButtons,
+        generalLinks
+      ];
+      
+      var i = 0;
+      var j = 0;
+      var selector = null;
+      var el = null;
+      
+      for (i = 0; i < allSelectors.length; i++) {
+        selector = allSelectors[i];
+        for (j = 0; j < selector.length; j++) {
+          el = selector[j];
+          if (isElementVisible(el) && isElementInteractable(el)) {
+            // 중복 체크
+            var isDuplicate = false;
+            var k = 0;
+            for (k = 0; k < elements.length; k++) {
+              if (elements[k] === el) {
+                isDuplicate = true;
+                break;
+              }
             }
-        } catch (e) {
-            console.error('[TFlix] Observer error:', e);
+            if (!isDuplicate) {
+              elements.push(el);
+            }
+          }
         }
+      }
+      
+      state.focusableElements = elements;
+      console.log('[Anilife TV] Found ' + elements.length + ' focusable elements');
+      return elements;
+    } catch (e) {
+      console.error('[Anilife TV] Error scanning:', e);
+      state.focusableElements = [];
+      return [];
+    }
+  }
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    
+    try {
+      if (el.offsetParent === null && el.tagName.toLowerCase() !== 'body') {
+        return false;
+      }
+
+      var rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        return false;
+      }
+
+      var style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') {
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isElementInteractable(el) {
+    if (!el) return false;
+
+    try {
+      var tagName = el.tagName.toLowerCase();
+      if (tagName === 'script' || tagName === 'style' || tagName === 'noscript') {
+        return false;
+      }
+
+      if (el.getAttribute('disabled')) {
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ========================================
+  // FOCUS MANAGEMENT
+  // ========================================
+  function setFocus(index) {
+    if (state.focusableElements.length === 0) {
+      return;
     }
 
-    // --- 9. 시작 함수 (여러 타이밍에 재시도) ---
-    function start() {
-        console.log('[TFlix] Starting (readyState: ' + document.readyState + ')');
-        
-        // 즉시 실행
-        setTimeout(function() {
-            init();
-            setupObserver();
-        }, 500);
-        
-        // 1초 후 재시도
-        setTimeout(function() {
-            if (state.elements.length === 0) {
-                console.log('[TFlix] Retry 1s - rescanning...');
-                scanElements();
-                if (state.elements.length > 0) {
-                    setFocus(0);
-                }
+    try {
+      if (state.lastFocus) {
+        state.lastFocus.classList.remove('tv-focused');
+        state.lastFocus.classList.remove('animating');
+      }
+
+      if (index < 0) {
+        index = 0;
+      }
+      if (index >= state.focusableElements.length) {
+        index = state.focusableElements.length - 1;
+      }
+
+      state.focusIndex = index;
+      var element = state.focusableElements[index];
+
+      if (!element) {
+        return;
+      }
+
+      element.classList.add('tv-focused');
+      if (CONFIG.focusAnimation) {
+        element.classList.add('animating');
+      }
+
+      // Chromium 47 호환 스크롤
+      try {
+        element.scrollIntoView(false); // false = align to bottom
+      } catch (e) {
+        // Fallback
+        if (element.scrollIntoViewIfNeeded) {
+          element.scrollIntoViewIfNeeded();
+        }
+      }
+
+      state.lastFocus = element;
+    } catch (e) {
+      console.error('[Anilife TV] Error setting focus:', e);
+    }
+  }
+
+  function moveFocus(direction) {
+    if (state.focusableElements.length === 0) {
+      scanFocusableElements();
+      if (state.focusableElements.length === 0) {
+        return;
+      }
+    }
+
+    try {
+      var currentEl = state.focusableElements[state.focusIndex];
+      if (!currentEl) {
+        setFocus(0);
+        return;
+      }
+
+      var currentIndex = state.focusIndex;
+      var bestIndex = -1;
+      var bestScore = Infinity;
+
+      var currentRect = currentEl.getBoundingClientRect();
+      var currentCenterX = currentRect.left + currentRect.width / 2;
+      var currentCenterY = currentRect.top + currentRect.height / 2;
+
+      var i = 0;
+      for (i = 0; i < state.focusableElements.length; i++) {
+        if (i === currentIndex) continue;
+
+        var el = state.focusableElements[i];
+        var rect = el.getBoundingClientRect();
+        var centerX = rect.left + rect.width / 2;
+        var centerY = rect.top + rect.height / 2;
+
+        var deltaX = centerX - currentCenterX;
+        var deltaY = centerY - currentCenterY;
+        var distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+        var isCandidate = false;
+
+        if (direction === 'up' && deltaY < -10 && Math.abs(deltaX) < currentRect.width * 2) {
+          isCandidate = true;
+        } else if (direction === 'down' && deltaY > 10 && Math.abs(deltaX) < currentRect.width * 2) {
+          isCandidate = true;
+        } else if (direction === 'left' && deltaX < -10 && Math.abs(deltaY) < currentRect.height * 2) {
+          isCandidate = true;
+        } else if (direction === 'right' && deltaX > 10 && Math.abs(deltaY) < currentRect.height * 2) {
+          isCandidate = true;
+        }
+
+        if (isCandidate && distance < bestScore) {
+          bestScore = distance;
+          bestIndex = i;
+        }
+      }
+
+      if (bestIndex !== -1) {
+        setFocus(bestIndex);
+      } else {
+        // Fallback: linear navigation
+        if (direction === 'down' || direction === 'right') {
+          if (currentIndex < state.focusableElements.length - 1) {
+            setFocus(currentIndex + 1);
+          }
+        } else if (direction === 'up' || direction === 'left') {
+          if (currentIndex > 0) {
+            setFocus(currentIndex - 1);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Anilife TV] Error moving focus:', e);
+    }
+  }
+
+  // ========================================
+  // TIZEN REMOTE CONTROL HANDLER
+  // ========================================
+  function handleKeyDown(e) {
+    var keyCode = e.keyCode;
+    var handled = false;
+
+    switch (keyCode) {
+      case 37:  // ← Left Arrow
+        e.preventDefault();
+        moveFocus('left');
+        handled = true;
+        break;
+      case 38:  // ↑ Up Arrow
+        e.preventDefault();
+        moveFocus('up');
+        handled = true;
+        break;
+      case 39:  // → Right Arrow
+        e.preventDefault();
+        moveFocus('right');
+        handled = true;
+        break;
+      case 40:  // ↓ Down Arrow
+        e.preventDefault();
+        moveFocus('down');
+        handled = true;
+        break;
+      case 13:  // Enter/OK button
+        e.preventDefault();
+        if (state.lastFocus) {
+          try {
+            state.lastFocus.click();
+            console.log('[Anilife TV] Clicked element');
+          } catch (err) {
+            console.error('[Anilife TV] Error clicking:', err);
+          }
+        }
+        handled = true;
+        break;
+      case 10009:  // Return/Back button (Tizen)
+        e.preventDefault();
+        try {
+          if (window.history.length > 1) {
+            window.history.back();
+          } else {
+            var closeButtons = document.querySelectorAll('[class*="close"], [class*="back"], [aria-label*="close"]');
+            if (closeButtons.length > 0) {
+              closeButtons[0].click();
             }
-        }, 1000);
-        
-        // 3초 후 재시도
-        setTimeout(function() {
-            if (state.elements.length === 0) {
-                console.log('[TFlix] Retry 3s - rescanning...');
-                scanElements();
-                if (state.elements.length > 0) {
-                    setFocus(0);
-                }
-            }
-        }, 3000);
-        
-        // 5초 후 최종 재시도
-        setTimeout(function() {
-            if (state.elements.length === 0) {
-                console.log('[TFlix] Retry 5s - final attempt...');
-                scanElements();
-                if (state.elements.length > 0) {
-                    setFocus(0);
-                } else {
-                    console.error('[TFlix] ✗ No elements found after 5 seconds');
-                    showToast("요소를 찾을 수 없음 (R키로 재시도)");
-                }
-            }
-        }, 5000);
-        
-        // 10초마다 주기적 재스캔
+          }
+        } catch (err) {
+          console.error('[Anilife TV] Error going back:', err);
+        }
+        handled = true;
+        break;
+    }
+
+    if (handled) {
+      e.stopPropagation();
+    }
+  }
+
+  // ========================================
+  // MUTATION OBSERVER (동적 콘텐츠 감지)
+  // ========================================
+  function setupMutationObserver() {
+    try {
+      if (!window.MutationObserver) {
+        // Fallback: 주기적 재스캔
         setInterval(function() {
-            var oldCount = state.elements.length;
-            scanElements();
-            var newCount = state.elements.length;
-            
-            if (oldCount === 0 && newCount > 0) {
-                console.log('[TFlix] Elements appeared! Setting focus...');
-                setFocus(0);
-            }
-        }, 10000);
+          scanFocusableElements();
+        }, 2000);
+        console.log('[Anilife TV] Using fallback polling (no MutationObserver)');
+        return;
+      }
+
+      var observer = new MutationObserver(function(mutations) {
+        var shouldRescan = false;
+        var i = 0;
+        for (i = 0; i < mutations.length; i++) {
+          if (mutations[i].addedNodes.length > 0 || mutations[i].removedNodes.length > 0) {
+            shouldRescan = true;
+            break;
+          }
+        }
+
+        if (shouldRescan) {
+          scanFocusableElements();
+        }
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+
+      console.log('[Anilife TV] MutationObserver active');
+    } catch (e) {
+      console.error('[Anilife TV] Error setting up observer:', e);
+    }
+  }
+
+  // ========================================
+  // BACK BUTTON UI
+  // ========================================
+  function injectBackButton() {
+    try {
+      if (document.querySelector('.tv-back-button')) {
+        return;
+      }
+
+      if (!document.body) {
+        return;
+      }
+
+      var backButton = document.createElement('button');
+      backButton.className = 'tv-back-button';
+      backButton.innerHTML = '&larr; Back';
+      
+      backButton.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (window.history.length > 1) {
+          window.history.back();
+        }
+      });
+
+      document.body.appendChild(backButton);
+      console.log('[Anilife TV] Back button injected');
+    } catch (e) {
+      console.error('[Anilife TV] Error injecting back button:', e);
+    }
+  }
+
+  // ========================================
+  // INITIALIZATION
+  // ========================================
+  function init() {
+    if (state.initialized) {
+      return;
     }
 
-    // --- 10. 진입점 ---
+    try {
+      console.log('[Anilife TV] Initializing for Tizen...');
+
+      // 1. Add CSS
+      if (!addStyles()) {
+        console.warn('[Anilife TV] Failed to add styles, continuing anyway');
+      }
+
+      // 2. Scan elements
+      scanFocusableElements();
+
+      // 3. Set initial focus
+      if (state.focusableElements.length > 0) {
+        setFocus(0);
+      } else {
+        console.warn('[Anilife TV] No focusable elements found initially');
+      }
+
+      // 4. Setup event listeners
+      document.addEventListener('keydown', handleKeyDown, true);
+
+      // 5. Setup observer
+      setupMutationObserver();
+
+      // 6. Inject back button
+      injectBackButton();
+
+      // 7. Periodic rescan
+      setInterval(function() {
+        var oldCount = state.focusableElements.length;
+        scanFocusableElements();
+        var newCount = state.focusableElements.length;
+        
+        if (oldCount !== newCount) {
+          console.log('[Anilife TV] Element count changed: ' + oldCount + ' -> ' + newCount);
+        }
+      }, 3000);
+
+      state.initialized = true;
+      console.log('[Anilife TV] ✓ Ready! Found ' + state.focusableElements.length + ' elements');
+      console.log('[Anilife TV] Use remote: ←↑→↓ to navigate, OK to select, RETURN to go back');
+    } catch (e) {
+      console.error('[Anilife TV] Initialization error:', e);
+      // 에러가 나도 계속 시도
+    }
+  }
+
+  // ========================================
+  // STARTUP SEQUENCE
+  // ========================================
+  function start() {
+    console.log('[Anilife TV] Starting...');
+    
+    // Tizen은 로딩이 느릴 수 있으므로 여러 타이밍에 시도
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start);
+      document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(init, 500);
+      });
     } else {
-        start();
+      setTimeout(init, 500);
     }
 
-    console.log('[TFlix] Script loaded');
+    // 추가 재시도 (타이젠 로딩 지연 대비)
+    setTimeout(function() {
+      if (!state.initialized) {
+        console.log('[Anilife TV] Retry initialization...');
+        init();
+      }
+    }, 2000);
+
+    setTimeout(function() {
+      if (!state.initialized) {
+        console.log('[Anilife TV] Final retry...');
+        init();
+      }
+    }, 5000);
+  }
+
+  // ========================================
+  // MAIN ENTRY POINT
+  // ========================================
+  try {
+    start();
+  } catch (e) {
+    console.error('[Anilife TV] Critical startup error:', e);
+  }
 
 })();

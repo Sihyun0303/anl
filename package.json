@@ -1,26 +1,32 @@
 {
-  "name": "tizen-anilife",
-  "version": "1.0.1",
-  "description": "Anilife for Samsung Tizen TV.",
-  "author": "TizenBrew",
-  "license": "MIT",
+  "name": "@Sihyun0303/anl",
+  "appName": "anilife",
+  "version": "1.0.0",
+  "description": "anilife",
   "packageType": "mods",
-  "appName": "Anilife",
   "websiteURL": "https://anilife.app",
-  "main": "index.js",
+  "main": "userScript.js",
+  "serviceFile": "service.js",
+  "author": "anilife",
+  "keys": [
+    "MediaPlayPause",
+    "MediaPlay",
+    "MediaPause",
+    "MediaStop",
+    "MediaFastForward",
+    "MediaRewind",
+    "MediaTrackNext",
+    "MediaTrackPrevious"
+  ],
   "repository": {
     "type": "git",
-    "url": "github.com/Sihyun0303/anl"
+    "url": "https://github.com/Sihyun0303/anl"
   },
   "keywords": [
     "tizenbrew",
+    "samsung-tv",
     "tizen",
-    "cineby",
-    "netflix",
-    "tv",
-    "smart-tv"
+    "tv-remote",
   ],
-  "engines": {
-    "node": ">=0.10.0"
-  }
+  "license": "MIT"
 }

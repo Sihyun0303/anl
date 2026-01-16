@@ -5,7 +5,7 @@
   "description": "anilife",
   "packageType": "mods",
   "websiteURL": "https://anilife.app",
-  "main": "userScript.js",
+  "main": "index.js",
   "serviceFile": "service.js",
   "author": "anilife",
   "keys": [
